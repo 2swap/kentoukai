@@ -1,0 +1,80 @@
+// ==UserScript==
+// @name         PlayOK Othello Recorder (Full Table Replacement Safe)
+// @namespace    http://tampermonkey.net/
+// @version      1.2
+// @description  Records Othello moves even if the move table is rebuilt entirely each move
+// @match        *://www.playok.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    let recordedMoves = [];
+    let lastTableHTML = '';
+
+    function getCurrentTimeString() {
+        const now = new Date();
+        return now.toISOString().replace(/[:.]/g, '-');
+    }
+
+    function extractMovesFromTable(table) {
+        const rows = table.querySelectorAll('tr');
+        const moves = [];
+        rows.forEach(tr => {
+            const cells = tr.querySelectorAll('td');
+            if (cells.length >= 3) {
+                const num = cells[0].innerText.trim();
+                const white = cells[1].innerText.trim();
+                const black = cells[2].innerText.trim();
+                moves.push(`${num}. White: ${white} / Black: ${black}`);
+            }
+        });
+        return moves;
+    }
+
+    function saveGameToFile() {
+        if (recordedMoves.length === 0) return;
+        const text = recordedMoves.join('\n');
+        const filename = `othello_game_${getCurrentTimeString()}.othello`;
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        console.log(`[Othello Recorder] Saved ${filename} (${recordedMoves.length} moves)`);
+    }
+
+    let lastMoveCount = 0;
+
+    function handleNewTable(table) {
+        const moves = extractMovesFromTable(table);
+        if (moves.length < lastMoveCount) {
+            console.log("[Othello Recorder] Table reset detected — new game starting.");
+            saveGameToFile();
+            recordedMoves = [];
+        }
+        // Add only new moves
+        const newMoves = moves.slice(recordedMoves.length);
+        newMoves.forEach(m => console.log(`[Othello Recorder] ${m}`));
+        recordedMoves = moves;
+        lastMoveCount = moves.length;
+    }
+
+    const observer = new MutationObserver(() => {
+        const table = document.querySelector('table.br');
+        if (table) {
+            const html = table.innerHTML;
+            if (html !== lastTableHTML) {
+                lastTableHTML = html;
+                handleNewTable(table);
+            }
+        }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+    console.log("[Othello Recorder] Watching for table updates...");
+})();
+
