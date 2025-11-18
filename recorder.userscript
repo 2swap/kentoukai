@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         PlayOK Othello Recorder (Full Table Replacement Safe)
+// @name         PlayOK Othello Move Recorder (Per-Move, Two-Line Files)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Records Othello moves even if the move table is rebuilt entirely each move
+// @version      2.1
+// @description  Save a file per move: line1 = history before click (space-separated), line2 = history after click (space-separated). Only saves when histories differ by exactly one appended move.
 // @match        *://www.playok.com/*
 // @grant        none
 // ==/UserScript==
@@ -10,71 +10,78 @@
 (function() {
     'use strict';
 
-    let recordedMoves = [];
-    let lastTableHTML = '';
-
     function getCurrentTimeString() {
         const now = new Date();
         return now.toISOString().replace(/[:.]/g, '-');
     }
 
-    function extractMovesFromTable(table) {
+    // Returns an array of moves in order, e.g. ["h6", "g5", "f4", ...]
+    function extractMovesFromTable() {
+        const table = document.querySelector('table.br');
+        if (!table) return [];
         const rows = table.querySelectorAll('tr');
         const moves = [];
         rows.forEach(tr => {
             const cells = tr.querySelectorAll('td');
-            if (cells.length >= 3) {
-                const num = cells[0].innerText.trim();
+            if (!cells || cells.length === 0) return;
+            // cells[0] usually the move number; cells[1] = white, cells[2] = black (but sometimes table has only two cells)
+            if (cells[1]) {
                 const white = cells[1].innerText.trim();
+                if (white) moves.push(white);
+            }
+            if (cells[2]) {
                 const black = cells[2].innerText.trim();
-                moves.push(`${num}. White: ${white} / Black: ${black}`);
+                if (black) moves.push(black);
             }
         });
         return moves;
     }
 
-    function saveGameToFile() {
-        if (recordedMoves.length === 0) return;
-        const text = recordedMoves.join('\n');
-        const filename = `othello_game_${getCurrentTimeString()}.othello`;
-        const blob = new Blob([text], { type: 'text/plain' });
+    function saveMoveFile(beforeArr, afterArr) {
+        const beforeLine = beforeArr.join(' ');
+        const afterLine = afterArr.join(' ');
+        const content = `${beforeLine}\n${afterLine}`;
+        const filename = `othello_move_${getCurrentTimeString()}.othello`;
+        const blob = new Blob([content], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
+        // append to body to ensure click works in some browsers
+        document.body.appendChild(a);
         a.click();
+        a.remove();
         URL.revokeObjectURL(url);
-        console.log(`[Othello Recorder] Saved ${filename} (${recordedMoves.length} moves)`);
+        console.log(`[Othello Recorder] Saved move file: ${filename}`);
     }
 
-    let lastMoveCount = 0;
-
-    function handleNewTable(table) {
-        const moves = extractMovesFromTable(table);
-        if (moves.length < lastMoveCount) {
-            console.log("[Othello Recorder] Table reset detected — new game starting.");
-            saveGameToFile();
-            recordedMoves = [];
+    // Helper: checks if before is exactly the prefix of after
+    function isPrefix(beforeArr, afterArr) {
+        if (beforeArr.length > afterArr.length) return false;
+        for (let i = 0; i < beforeArr.length; i++) {
+            if (beforeArr[i] !== afterArr[i]) return false;
         }
-        // Add only new moves
-        const newMoves = moves.slice(recordedMoves.length);
-        newMoves.forEach(m => console.log(`[Othello Recorder] ${m}`));
-        recordedMoves = moves;
-        lastMoveCount = moves.length;
+        return true;
     }
 
-    const observer = new MutationObserver(() => {
-        const table = document.querySelector('table.br');
-        if (table) {
-            const html = table.innerHTML;
-            if (html !== lastTableHTML) {
-                lastTableHTML = html;
-                handleNewTable(table);
+    // Click listener: capture phase so we read the table before site handles the click
+    document.addEventListener('click', (event) => {
+        const before = extractMovesFromTable();
+        console.log(before);
+
+        // Read again after 200ms (0.2s) as requested
+        setTimeout(() => {
+            const after = extractMovesFromTable();
+
+            // Must be exactly one new move, and before must be prefix of after
+            if (after.length === before.length + 1 && isPrefix(before, after)) {
+                saveMoveFile(before, after);
+            } else {
+                console.log(`[Othello Recorder] No single appended move detected (before=${before.length}, after=${after.length}).`);
             }
-        }
-    });
+        }, 200);
+    }, true); // capture = true
 
-    observer.observe(document.body, { childList: true, subtree: true });
-    console.log("[Othello Recorder] Watching for table updates...");
+    console.log("[Othello Recorder] Per-move recorder active (two-line files).");
 })();
 
